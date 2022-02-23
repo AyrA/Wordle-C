@@ -13,11 +13,13 @@
 #define WORD_LENGTH 5
 //Number of tries allowed to find the word
 #define MAX_TRIES 6
+//Number of characters in the alphabet + 1
+#define ALPHA_SIZE 27
 //If set, the word and a few stats are printed before the game starts
 //#define DEBUG
 
 //Very cheap error termination script
-#define err(x)fprintf(stderr, EOL "[%s:%i] Fatal error: %s" EOL, __FILE__, __LINE__, x);abort();
+#define err(x) fprintf(stderr, EOL "[%s:%i] Fatal error: %s" EOL, __FILE__, __LINE__, x);abort();
 
 //Note: CRLF is also used for telnet.
 //If you want to make it available in a BBS you may want to force a CRLF
@@ -35,15 +37,19 @@
 //Files for lists that contain all words and solutions
 FILE * fpAll,  * fpSol;
 //Number of words in the solution list
-int wordCount = 0;
+long wordCount = 0;
 //Selected word from solution list
 char word[WORD_LENGTH + 1] = {0};
 //Possible characters (used to show unused characters)
 //The size specifier is necessary or its value will be readonly
-char alpha[27] = "abcdefghijklmnopqrstuvwxyz";
+char alpha[ALPHA_SIZE] = "abcdefghijklmnopqrstuvwxyz";
+//Memory cache:
+//0-25 File position in the complete list with words that start with the given letter a-z
+//26: Number of words in the solution list
+long memcache[ALPHA_SIZE];
 
 //Reads solution list and picks a random word
-int setup(void);
+long setup(void);
 //Pick the given word
 int pickWord(char * word, int index);
 //Checks if the supplied word is in the list
@@ -52,6 +58,8 @@ bool hasWord(const char * word);
 int toLower(char * str);
 //Checks the entered word against the solution
 bool checkWord(const char * guess);
+//Checks if the entered string is a potentially valid word
+bool isWord(const char* word);
 //Gets the first position of the given char in the given string
 int strpos(const char * str, char search);
 //Removes characters in the supplied argument from the alphabet
@@ -104,7 +112,7 @@ int menu() {
 		"LOAD <num>: load a specific game" EOL
 		"HELP: More information" EOL
 		"EXIT: End game");
-	printf("The game number must be in range of 1-%i" EOL, wordCount);
+	printf("The game number must be in range of 1-%li" EOL, wordCount);
 	while (true) {
 		printf("Input: ");
 		while ((scan = scanf("%20s", buffer)) != 1) {
@@ -160,7 +168,7 @@ void gameLoop() {
 			toLower(guess);
 			//Do not bother doing all the test logic if we've found the word.
 			if (strcmp(guess, word)) {
-				if (hasWord(guess)) {
+				if (isWord(guess) && hasWord(guess)) {
 					++guesses;
 					//TODO: Check guess against word
 					if (checkWord(guess)) {
@@ -264,13 +272,16 @@ int toLower(char * str) {
 }
 
 int hasWord(const char * word) {
-	char buffer[WORD_LENGTH + 1];
+	//A bit longer to also contain the line terminator
+	char buffer[WORD_LENGTH + 4];
 	//Don't bother if the argument is invalid
-	if (word == NULL || strlen(word) != WORD_LENGTH) {
+	if (word == NULL || strlen(word) != WORD_LENGTH || !isWord(word)) {
 		return false;
 	}
-	fseek(fpAll, 0, SEEK_SET);
-	while (fgets(buffer, WORD_LENGTH + 1, fpAll) != NULL) {
+	fseek(fpAll, memcache[word[0]-'a'], SEEK_SET);
+	//Stop comparing once we are beyond the current letter
+	while (fgets(buffer, WORD_LENGTH + 4, fpAll) != NULL && buffer[0]==word[0]) {
+		buffer[WORD_LENGTH]=0;
 		if (strcmp(word, buffer) == 0) {
 			return true;
 		}
@@ -278,13 +289,45 @@ int hasWord(const char * word) {
 	return false;
 }
 
-int setup() {
+bool isWord(const char* word){
+	int i=-1;
+	if(strlen(word) == WORD_LENGTH){
+		while(word[++i]){
+			if(word[i]<'a' || word[i]>'z'){
+				return false;
+			}
+		}
+		return true;
+	}
+	return false;
+}
+
+long setup() {
+	FILE* cache;
+	char currentChar;
 	char currentWord[WORD_LENGTH + 1];
-	srand((int)time(0));
+	bool success = false;
+	
+	//Don't bother if setup was already performed
 	if (wordCount > 0) {
 		return wordCount;
 	}
-	puts("Loading word list...");
+	srand((int)time(0));
+	
+	if ((cache = fopen("LISTS\\CACHE.BIN","rb")) != NULL) {
+		printf("Reading cache... ");
+	    success = fread(memcache, sizeof(long), ALPHA_SIZE, cache) == ALPHA_SIZE;
+	    fclose(cache);
+		if(success){
+			puts(" [OK]");
+			return wordCount = memcache[ALPHA_SIZE - 1];
+		}
+		else{
+			puts(" [FAIL]");
+		}
+	}
+	
+	printf("Loading word list...");
 	fseek(fpSol, 0, SEEK_SET);
 	while (fgets(currentWord, WORD_LENGTH + 1, fpSol) != NULL) {
 		//Only increment if word length is correct
@@ -292,6 +335,34 @@ int setup() {
 			++wordCount;
 		}
 	}
+	puts(" [OK]");
+	memcache[ALPHA_SIZE-1] = wordCount;
+
+	if (!success) {
+	    printf("Building cache...");
+		currentChar = 'a';
+		memcache[0] = 0;
+		fseek(fpAll, 0, SEEK_SET);
+		while (fgets(currentWord, WORD_LENGTH + 1, fpAll) != NULL) {
+			//Only proceed if word length is correct
+			if (strlen(currentWord) == WORD_LENGTH) {
+			    if (currentChar != currentWord[0]) {
+			        currentChar = currentWord[0];
+			        memcache[currentChar - 'a'] = ftell(fpAll) - 5;
+			    }
+			}
+		}
+		cache = fopen("LISTS\\CACHE.BIN", "wb");
+		if (cache == NULL) {
+			puts(" [FAIL]");
+		}
+		else{
+			fwrite(memcache, sizeof(long), ALPHA_SIZE, cache);
+			fclose(cache);
+			puts(" [OK]");
+		}
+	}
+
 	return wordCount;
 }
 
