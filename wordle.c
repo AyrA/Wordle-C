@@ -74,6 +74,7 @@ void help(void);
 //Main function
 int main() {
 	int gameId;
+	setbuf(stdout, NULL);
 	//Note: This will search for the file in the current directory
 	fpAll = fopen("LISTS\\ALL.TXT", "r");
 	fpSol = fopen("LISTS\\SOLUTION.TXT", "r");
